@@ -1,5 +1,5 @@
 {
-  "name": "header-ipc",
+  "name": "node-native-fork",
   "version": "1.0.0",
   "description": "Single C++ header for implementing child_process IPC",
   "main": "lib/index.js",
