@@ -30,3 +30,17 @@
 *.exe
 *.out
 *.app
+
+# vim
+.*.swp
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+Makefile
+cmake_install.cmake
+
+# builds
+hipc
+# node.js
+node_modules/
