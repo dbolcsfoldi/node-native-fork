@@ -17,6 +17,9 @@
     "C++",
     "header"
   ],
+  "files": [
+    "inc/hipc.h"
+  ],
   "private": false,
   "license": "MIT",
   "devDependencies": {
