@@ -158,6 +158,10 @@ namespace hipc {
     }
 
     WriteRequest & operator =(const WriteRequest &from) = default;
+    
+    bool operator ==(uv_write_t *r) {
+      return &req == r;  
+    }
   };
 
   static bool to_int(const char *str, int *i) {
@@ -273,7 +277,6 @@ namespace hipc {
           handleMessage(json);
           json_object_put(json);
         }
-
       }
 
       static void onRead(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
@@ -287,9 +290,7 @@ namespace hipc {
       }
 
       void onWriteImpl(uv_write_t *req, int status) {
-        auto found = std::find_if(pendingRequests_.begin(), pendingRequests_.end(), [req] (const WriteRequest &r) -> bool {
-            return (&r.req == req);
-        });
+        auto found = std::find(pendingRequests_.begin(), pendingRequests_.end(), req);
 
         assert(found != pendingRequests_.end());
         pendingRequests_.erase(found);
