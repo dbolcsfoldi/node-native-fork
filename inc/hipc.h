@@ -306,9 +306,11 @@ namespace hipc {
       }
 
       void sendImpl(WriteRequest &req) {
+        static char new_line[1] = { '\n' };
+
         uv_buf_t bufs[2] = {
           { .base = req.buf.base, .len = req.buf.len },
-          { .base = "\n", .len = 1 }
+          { .base = new_line, .len = 1 }
         };
     
         Error err(uv_write(&req.req, 
