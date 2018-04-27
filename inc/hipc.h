@@ -28,6 +28,7 @@ SOFTWARE.
 #include <functional>
 #include <vector>
 #include <string>
+#include <algorithm>
 #include <sstream>
 #include <cassert>
 
