@@ -27,24 +27,44 @@ SOFTWARE.
 #include <iostream>
 
 static const std::string kPing = "ping";
+static const std::string kSocket = "socket";
+static const std::string kPingJson = "{\"cmd\":\"ping\"}";
+
+static void on_close(uv_handle_t *handle) {
+  delete handle;
+}
+
+static void on_write(uv_write_t *req, int status) {
+  assert(status > 0);
+  uv_close(reinterpret_cast<uv_handle_t *>(req->handle), on_close);
+}
 
 int main(int argc, char *argv[]) {
   hipc::IPC ipc;
 
-  ipc.message.On([&](struct json_object *message) {
-    std::cout << "Received message:" << std::endl;
-    std::cout << json_object_to_json_string_ext(message, JSON_C_TO_STRING_SPACED) << std::endl;
+  ipc.message.On([&](struct json_object *message, uv_stream_t *sendHandle) {
     struct json_object *cmd = nullptr;
     
-    if (json_object_object_get_ex(message, "cmd", &cmd) &&
-        json_object_get_string(cmd) == kPing) {
+    if (!json_object_object_get_ex(message, "cmd", &cmd)) {
+      ipc.Send("{ \"error\": \"Unknown message\" }");
+      return;  
+    }
+
+    if (json_object_get_string(cmd) == kPing) {
       struct json_object *reply = json_object_new_object();
 
       json_object_object_add(reply, "cmd", json_object_new_string("pong"));
       ipc.Send(reply);
       json_object_put(reply);  
+    } else if(json_object_get_string(cmd) == kSocket) {
+      uv_write_t req;
+      uv_buf_t buf[] = {
+        { .base = const_cast<char *>(kPingJson.c_str()), .len = kPingJson.size() }
+      };
+
+      uv_write(&req, sendHandle, buf, 1, on_write);
     } else {
-      ipc.Send("{ \"error\": \"Unknown command\" }");
+      ipc.Send("{ \"error\": \"Unsupported message\" }");
     }
   });
 

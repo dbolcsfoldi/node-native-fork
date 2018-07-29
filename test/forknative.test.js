@@ -1,5 +1,6 @@
 const cp = require('../lib/index');
 const util = require('util');
+const net = require('net')
 
 test('disconnect', done => {
   let child = cp.forkNative('./hipc');
@@ -79,5 +80,34 @@ test('kill', done => {
 
   expect(child.connected).toEqual(true);
   child.kill();
+});
+
+test('send socket', done => {
+  let ponger = cp.forkNative('./hipc')
+  let pinger = cp.fork('./test/pinger.js')
+
+  let opts = {
+    allowHalfOpen: false,
+    pauseOnConnect: false
+  }
+
+  let srv = net.createServer(opts)
+  
+  srv.on('connection', (sock) => {
+    ponger.send({ cmd: 'socket' }, sock)
+  })
+
+  srv.on('listening', () => {
+    pinger.send({ cmd: 'connect', port: srv.address().port })
+  })
+
+  pinger.on('message', (msg) => {
+    expect(msg).toEqual({ cmd: 'ping' })
+    srv.close()
+    pinger.kill()
+    done()
+  })
+
+  srv.listen()
 });
 

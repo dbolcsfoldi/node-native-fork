@@ -31,6 +31,7 @@ SOFTWARE.
 #include <algorithm>
 #include <sstream>
 #include <cassert>
+#include <cstdio>
 
 #include <uv.h>
 #include <json-c/json.h>
@@ -177,6 +178,9 @@ namespace hipc {
 
   static const std::string kInternalPrefix = "NODE_";
   static const std::string kNodeChannelFd = "NODE_CHANNEL_FD"; 
+  static const std::string kNodeHandle = "NODE_HANDLE";
+  static const std::string kNodeHandleAck = "NODE_HANDLE_ACK";
+  static const std::string kNodeHandleNack = "NODE_HANDLE_NACK"; 
 
   class IPC {
     public:
@@ -193,13 +197,18 @@ namespace hipc {
           uv_close(reinterpret_cast<uv_handle_t *>(&handle_), IPC::onClose);
         }
 
+        if (sendHandle_) {
+          uv_close(reinterpret_cast<uv_handle_t *>(sendHandle_), IPC::closeSendHandle);
+          sendHandle_ = nullptr;
+        }
+
         uv_loop_close(uv_default_loop());
         json_tokener_free(tokener_);
       }
 
-      void Send(struct json_object *json) {
-        const char *str = json_object_to_json_string_ext(json, JSON_C_TO_STRING_PLAIN);
-        
+     void Send(struct json_object *json) {
+        const char *str = json_object_to_json_string_ext(json, JSON_C_TO_STRING_PLAIN);    
+
         pendingRequests_.emplace_back(reinterpret_cast<const void *>(str), strlen(str));
         sendImpl(pendingRequests_.back());
       }
@@ -229,21 +238,72 @@ namespace hipc {
         buf->len = suggested_size;
       }
 
-      void handleMessage(struct json_object *json) {
+      bool isInternalMessage(struct json_object *json) {
         struct json_object *cmd = nullptr;
-        
+
         if (json_object_object_get_ex(json, "cmd", &cmd) && 
             json_object_is_type(cmd, json_type_string)) {
           std::string cmdStr(json_object_get_string(cmd));
-
-          if (cmdStr.substr(0, kInternalPrefix.length()) == kInternalPrefix) {
-            assert(false);
-            // TODO: Internal messages not handled yet
-            return;
-          }
+          return cmdStr.substr(0, kInternalPrefix.length()) == kInternalPrefix;
         }
 
-        message.Emit(json);
+        return false;
+      }
+
+      uv_stream_t * makeHandle(uv_handle_type type) {
+        switch (type) {
+          case UV_NAMED_PIPE:
+            {
+              uv_pipe_t *p = new uv_pipe_t;
+              uv_pipe_init(uv_default_loop(), p, 1);
+              return reinterpret_cast<uv_stream_t *>(p);
+            }
+          case UV_TCP:
+            {
+              uv_tcp_t *t = new uv_tcp_t;
+              uv_tcp_init(uv_default_loop(), t);
+              return reinterpret_cast<uv_stream_t *>(t);
+            }
+          default:
+            return nullptr;
+        }
+      }
+
+      void handleInternalMessage(struct json_object *json) {
+        struct json_object *cmd = nullptr;
+
+        assert(json_object_object_get_ex(json, "cmd", &cmd)); 
+        assert(json_object_is_type(cmd, json_type_string));
+
+        std::string cmdStr(json_object_get_string(cmd));
+
+        if (cmdStr == kNodeHandle &&
+            uv_pipe_pending_count(&handle_) > 0) {
+          uv_handle_type type = uv_pipe_pending_type(&handle_);
+          uv_stream_t *handle = makeHandle(type);
+
+          if (!handle || 
+            uv_accept(reinterpret_cast<uv_stream_t *>(&handle_), handle) < 0) {
+            sendCmd(kNodeHandleNack);
+          } else {
+            sendHandle_ = handle;
+            sendCmd(kNodeHandleAck);
+            struct json_object *msg = nullptr;
+            
+            if (json_object_object_get_ex(json, "msg", &msg)) {
+              handleMessage(msg);
+            }  
+          }
+        }
+      }
+
+      void handleMessage(struct json_object *json) {
+        if (isInternalMessage(json)) {
+          handleInternalMessage(json);
+        } else {
+          message.Emit(json, sendHandle_);
+          sendHandle_ = nullptr;
+        }
       }
 
       void onReadImpl(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
@@ -259,7 +319,7 @@ namespace hipc {
         }
 
         str_.write(buf->base, nread);
-        
+
         for (std::string line; std::getline(str_, line); ) {
           json_tokener_reset(tokener_);
           struct json_object *json = json_tokener_parse(line.c_str());
@@ -268,13 +328,6 @@ namespace hipc {
             continue;
           }
 
-          struct json_object *nodeHandle = nullptr;
-          if (json_object_object_get_ex(json, "NODE_HANDLE", &nodeHandle) && 
-              uv_pipe_pending_count(&handle_) > 0) {
-            assert(false);
-            // TODO: Implement passing file handles
-          }
- 
           handleMessage(json);
           json_object_put(json);
         }
@@ -307,6 +360,13 @@ namespace hipc {
         ipc->onWriteImpl(req, status);
       }
 
+      void sendCmd(const std::string &cmd) {
+        struct json_object *obj = json_object_new_object();
+        json_object_object_add(obj, "cmd", json_object_new_string(cmd.c_str()));
+        Send(obj);
+        json_object_put(obj);
+      }
+
       void sendImpl(WriteRequest &req) {
         static char new_line[1] = { '\n' };
 
@@ -314,7 +374,7 @@ namespace hipc {
           { .base = req.buf.base, .len = req.buf.len },
           { .base = new_line, .len = 1 }
         };
-    
+   
         Error err(uv_write(&req.req, 
               reinterpret_cast<uv_stream_t *>(&handle_), 
               bufs,
@@ -326,9 +386,13 @@ namespace hipc {
         }
       }
 
+      static void closeSendHandle(uv_handle_t *handle) {
+        delete handle;
+      }
+
     public:
       Event<> disconnect;
-      Event<struct json_object *> message;
+      Event<struct json_object *, uv_stream_t *> message;
       Event<Error> error;
 
     private:
@@ -338,6 +402,7 @@ namespace hipc {
       uv_pipe_t handle_;
       std::stringstream str_;
       std::vector<WriteRequest> pendingRequests_;
+      uv_stream_t *sendHandle_; 
   }; 
 }
 
