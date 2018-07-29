@@ -3,6 +3,8 @@ Single C++ header for implementing node child_process IPC
 
 # Description
 
+:e
+
 # Install
 
 ## OS X
@@ -18,6 +20,19 @@ Single C++ header for implementing node child_process IPC
 ## node.js
 
 # Test
+
+To build test server:
+
+```
+cmake -G "Unix Makefiles"
+make
+```
+
+and then run tests with
+
+```
+npm test
+```
 
 # TODO
 
